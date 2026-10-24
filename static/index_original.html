@@ -1,0 +1,63 @@
+<!doctype html><html><head><meta charset="utf-8"><title>MotionInk</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#16181d;--pn:#1f232b;--tx:#e6e9ef;--mu:#8b93a3;--cy:#00e5ff;--vi:#a78bfa;--am:#ffb300}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:12px 20px;display:flex;align-items:baseline;gap:14px}h1{margin:0;font-size:22px;letter-spacing:.5px}h1 b{color:var(--cy)}header span{color:var(--mu)}
+main{display:grid;grid-template-columns:1fr 330px;gap:14px;padding:0 20px 20px}.pn{background:var(--pn);border-radius:12px;padding:12px;margin-bottom:12px}
+canvas{width:100%;background:#000;border-radius:8px;display:block}button,input[type=file]::file-selector-button{background:#2b313c;color:var(--tx);border:1px solid #3a4150;border-radius:7px;padding:6px 11px;cursor:pointer;margin:2px}
+button:hover{border-color:var(--cy)}button.p{background:var(--cy);color:#001;border:0;font-weight:600}.row{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:8px}
+.lg i{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 5px 0 10px;vertical-align:-1px}h3{margin:0 0 6px;font-size:13px;color:var(--mu);text-transform:uppercase;letter-spacing:1px}
+img{width:100%;border-radius:8px;background:#000;min-height:90px}.st{font-weight:600}.ok{color:#4ade80}.er{color:#f87171}small{color:var(--mu)}input[type=range]{flex:1}
+#chart{width:100%;height:190px;background:#171a20;border-radius:8px;margin:8px 0} .legend{font-size:11px;color:var(--mu)}
+</style></head><body>
+<header><h1>Motion<b>Ink</b></h1><span>Draw It. Bend It. Repeat It.</span></header>
+<main><div>
+<div class="pn"><canvas id="cv" width="960" height="540"></canvas>
+<div class="row"><input type="file" id="file" accept=".mp4,.mov,.avi"><button id="play">▶ Play</button><button id="restart">⏮ Restart</button><input type="range" id="sl" min="0" max="0" value="0"><small id="fr">frame 0</small></div>
+<div class="row"><button class="p" id="selbtn">1 · Select car</button><button class="p" id="trk">2 · Track from this frame</button><button id="stp">Stop</button>
+<label><input type="checkbox" id="tg" checked> target</label><label><input type="checkbox" id="dv" checked> deviation</label><button id="rebuild">Rebuild target</button>
+<button id="undo">Undo</button><button id="rst">Reset target</button><button id="all">Reset demo</button></div>
+<div class="row lg"><i style="background:var(--vi)"></i>actual (recorded)<i style="background:var(--cy)"></i>target (editable)<i style="background:var(--am)"></i>deviation / selected point</div>
+<div class="row"><span class="st" id="trs">—</span></div></div></div>
+<div>
+<div class="pn"><h3>Hand control</h3><img id="cam" alt="webcam preview"><div class="row"><button class="p" id="camb">Start camera</button><span id="gs" class="st">camera off</span></div>
+<div class="row"><small>Pinch threshold</small><input type="range" id="th" min="0.15" max="0.6" step="0.01" value="0.35"></div>
+<div class="row"><small>Edge margin</small><input type="range" id="mg" min="0" max="0.3" step="0.01" value="0.12"></div></div>
+<div class="pn"><h3>Comparison</h3><div id="met"><small>Track a car to see metrics.</small></div><canvas id="chart" width="360" height="190" role="img" aria-label="Distance and mean deviation by frame"></canvas><small class="legend">Distance: per-frame distance from recorded car to calculated path · Mean deviation: cumulative average distance · Amber box: animated car position on the calculated path</small></div>
+<div class="pn"><h3>How to use</h3><small>1. Upload video, scrub to a frame where the car is visible.<br>2. <b>Select car</b>, drag a box on the video, then <b>Track</b>. (Prototype tracks the object you select; it does not auto-recognise vehicles.)<br>3. Start camera. Move your index finger: the amber ring is your cursor. Hover a cyan point, <b>pinch</b> thumb+index to grab it, move, release.<br>4. Editing the target never changes the recorded movement.</small></div></div></main>
+<script>
+const $=id=>document.getElementById(id),cv=$('cv'),cx=cv.getContext('2d'),C={cy:'#00e5ff',vi:'#a78bfa',am:'#ffb300'};
+let st=null,frame=0,playing=false,img=new Image(),selMode=false,box=null,drag0=null,actual=[],dist=[],meanDist=[],frameStart=0,frameEnd=0,tv=-1,rv=-1,lastT=0,ghostBox=null;
+const J=(u,b)=>fetch(u,{method:b?'POST':'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(r=>r.json());
+function renderChart(){const c=$('chart'),g=c.getContext('2d'),w=c.width,h=c.height,L=42,R=10,T=12,B=26,vals=dist.filter(Number.isFinite);g.clearRect(0,0,w,h);if(!vals.length){g.fillStyle='#8b93a3';g.textAlign='center';g.fillText('Track a car to see the graph.',w/2,h/2);return}const max=Math.max(1,...vals,...meanDist.filter(Number.isFinite))*1.1;g.font='10px sans-serif';g.strokeStyle='#424956';g.fillStyle='#8b93a3';g.textAlign='right';for(let i=0;i<=4;i++){const y=T+(h-T-B)*i/4;g.beginPath();g.moveTo(L,y);g.lineTo(w-R,y);g.stroke();g.fillText((max*(4-i)/4).toFixed(0),L-5,y+3)}g.textAlign='center';g.fillText('frame',w/2,h-5);g.save();g.translate(10,h/2);g.rotate(-Math.PI/2);g.fillText('distance (px)',0,0);g.restore();const series=(a,color)=>{g.beginPath();let on=false;a.forEach((v,i)=>{if(v==null||!Number.isFinite(v)){on=false;return}const x=L+i/Math.max(1,a.length-1)*(w-L-R),y=T+(1-v/max)*(h-T-B);if(on)g.lineTo(x,y);else g.moveTo(x,y);on=true});g.strokeStyle=color;g.lineWidth=2;g.stroke()};series(dist,'#00e5ff');series(meanDist,'#ffb300')}
+function pathPointAt(p){const a=st?.target?.poly||[];if(a.length<2)return null;const lens=[];let sum=0;for(let i=1;i<a.length;i++){const d=Math.hypot(a[i][0]-a[i-1][0],a[i][1]-a[i-1][1]);lens.push(d);sum+=d}let rem=Math.max(0,Math.min(1,p))*sum;for(let i=0;i<lens.length;i++){if(rem<=lens[i]||i===lens.length-1){const t=lens[i]?rem/lens[i]:0;return[a[i][0]+(a[i+1][0]-a[i][0])*t,a[i][1]+(a[i+1][1]-a[i][1])*t]}rem-=lens[i]}return a.at(-1)}
+function load(i){frame=Math.max(0,Math.min(i,(st?.video?.n||1)-1));img=new Image();img.onload=draw;img.src='/api/frame/'+frame;$('sl').value=frame;$('fr').textContent='frame '+frame+(st?.video?' / '+(st.video.n-1):'')}
+function path(pts){cx.beginPath();pts.forEach((p,i)=>i?cx.lineTo(p[0],p[1]):cx.moveTo(p[0],p[1]))}
+function draw(){const v=st?.video;if(!v)return;if(cv.width!=v.w){cv.width=v.w;cv.height=v.h}cx.drawImage(img,0,0,v.w,v.h);
+ cx.lineWidth=3;cx.lineJoin='round';cx.strokeStyle=C.vi;actual.forEach(s=>{if(s.length>1){path(s);cx.stroke()}}); // each segment separate: gaps never bridged
+ const t=st.target,m=t.mode;
+ if($('dv').checked&&dist.length){cx.strokeStyle=C.am;cx.lineWidth=5;let k=0;const th=dist.th;actual.forEach((s,si)=>{const a=st._starts[si];cx.beginPath();let on=false;s.forEach((p,j)=>{const d=dist[a+j];if(d!=null&&d>th){on?cx.lineTo(p[0],p[1]):cx.moveTo(p[0],p[1]);on=true}else on=false});cx.stroke()})}
+ if($('tg').checked&&t.poly.length>1){cx.strokeStyle=C.cy;cx.lineWidth=3;cx.setLineDash([9,6]);path(t.poly);cx.stroke();cx.setLineDash([]);
+  t.cp.forEach((p,i)=>{const sel=i===t.sel,hov=i===t.hover;cx.beginPath();cx.arc(p[0],p[1],sel?12:hov?10:7,0,7);cx.fillStyle=sel?C.am:C.cy;cx.fill();if(hov||sel){cx.strokeStyle='#fff';cx.lineWidth=2;cx.stroke()}})}
+ if(ghostBox&&t.poly.length>1){const p=pathPointAt((frame-frameStart)/Math.max(1,frameEnd-frameStart)),[w,h]=ghostBox;if(p){cx.save();cx.setLineDash([6,4]);cx.strokeStyle=C.am;cx.fillStyle='rgba(255,179,0,.16)';cx.lineWidth=3;cx.fillRect(p[0]-w/2,p[1]-h/2,w,h);cx.strokeRect(p[0]-w/2,p[1]-h/2,w,h);cx.setLineDash([]);cx.beginPath();cx.arc(p[0],p[1],4,0,7);cx.fillStyle=C.am;cx.fill();cx.restore()}}
+ const tr=st.track;if(tr&&tr.status!='idle'){}
+ if(box){cx.strokeStyle=C.am;cx.lineWidth=2;cx.strokeRect(...box)}
+ if(st.cursor){const[x,y]=st.cursor;cx.beginPath();cx.arc(x,y,m=='drag'?16:12,0,7);cx.strokeStyle=m=='drag'?C.am:m=='hover'?'#fff':C.cy;cx.lineWidth=m=='drag'?5:2;cx.stroke();
+  cx.fillStyle='#fff';cx.font='13px sans-serif';cx.fillText({drag:'DRAGGING',hover:'HOVER',pinch_empty:'PINCH (no point near)',none:''}[m],x+20,y-12)}}
+function pos(e){const r=cv.getBoundingClientRect();return[(e.clientX-r.left)*cv.width/r.width,(e.clientY-r.top)*cv.height/r.height]}
+cv.onmousedown=e=>{if(selMode)drag0=pos(e)};cv.onmousemove=e=>{if(drag0){const p=pos(e);box=[Math.min(drag0[0],p[0]),Math.min(drag0[1],p[1]),Math.abs(p[0]-drag0[0]),Math.abs(p[1]-drag0[1])];draw()}};cv.onmouseup=()=>{drag0=null}
+$('selbtn').onclick=()=>{selMode=true;playing=false;box=null;$('trs').textContent='Drag a box tightly around the car on this frame, then press Track.'};
+$('trk').onclick=async()=>{if(!box)return alert('Select the car first.');const r=await J('/api/track',{frame,box});if(r.error)alert(r.error);selMode=false};
+$('stp').onclick=()=>J('/api/stop_track',{});$('undo').onclick=()=>J('/api/target/undo',{});$('rst').onclick=()=>J('/api/target/reset',{});$('rebuild').onclick=()=>J('/api/target/rebuild',{});
+$('all').onclick=async()=>{await J('/api/reset',{});box=null;actual=[];dist=[];load(0)};
+$('file').onchange=async e=>{const fd=new FormData();fd.append('video',e.target.files[0]);$('trs').textContent='Uploading…';const r=await(await fetch('/api/upload',{method:'POST',body:fd})).json();if(r.error)return alert(r.error);await poll();$('sl').max=st.video.n-1;actual=[];dist=[];load(0)};
+$('play').onclick=()=>{playing=!playing;$('play').textContent=playing?'⏸ Pause':'▶ Play'};$('restart').onclick=()=>{load(0)};$('sl').oninput=e=>{playing=false;load(+e.target.value)};
+let camOn=false;$('camb').onclick=async()=>{camOn=!camOn;await J('/api/camera',{on:camOn});$('camb').textContent=camOn?'Stop camera':'Start camera';$('cam').src=camOn?'/api/webcam':''};
+$('th').oninput=e=>J('/api/config',{enter:+e.target.value,exit:+e.target.value+.2});$('mg').oninput=e=>J('/api/config',{margin:+e.target.value});
+async function poll(){st=await J('/api/state');const v=st.video;if(v){let tchg=false;if(st.track.v!=rv){tchg=true;rv=st.track.v;const a=await J('/api/actual');actual=a.segs;st._starts=a.starts;window._starts=a.starts}st._starts=window._starts||[]
+ if(st.target.v!=tv||tchg){tv=st.target.v;const a=await J('/api/analysis');dist=a.dist||[];meanDist=a.mean_dist||[];frameStart=a.frame_start||0;frameEnd=a.frame_end||0;ghostBox=a.endpoint_box?[a.endpoint_box[2],a.endpoint_box[3]]:null;renderChart();if(a.m){dist.th=a.m.thresh;$('met').innerHTML=`Mean deviation <b>${a.m.mean_px.toFixed(1)} px</b> (${a.m.mean_pct.toFixed(1)}% of frame diagonal)<br>Maximum distance <b>${a.m.max_px.toFixed(1)} px</b><br><small>Graph shows frame-by-frame distance and cumulative mean deviation.</small>`}else{$('met').innerHTML='<small>Need at least two tracked positions and a target path.</small>'}}
+ const T=st.track;$('trs').innerHTML=`Tracking: <span class="${T.status=='lost'||T.status=='error'?'er':'ok'}">${T.status}</span> — ${T.msg}`}
+ const c=st.cam,g=st.gesture;$('gs').innerHTML=c.error?`<span class="er">${c.error}</span>`:c.status=='running'?(g.hand?`<span class="ok">hand ✓</span> · pinch ${g.pinch?'<span style="color:#ffb300">ACTIVE</span>':'off'}`:'no hand detected'):c.status;draw()}
+setInterval(()=>poll().catch(()=>{}),50);
+(function loop(t){if(playing&&st?.video&&t-lastT>1000/st.video.fps){lastT=t;if(frame>=st.video.n-1){playing=false;$('play').textContent='▶ Play'}else load(frame+1)}requestAnimationFrame(loop)})(0);
+</script></body></html>
